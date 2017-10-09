@@ -1,5 +1,15 @@
 # SSSD - System Security Services Daemon
 
+## Why did I fork this?
+While SSSD generally does everything we need it to do, our organization 
+actually needed it to match against more than one username attribute.  By
+default, when more than one username attribute is found, SSSD will default
+to using the first.  This function isn't optimal because the order of attribute
+retrieval isn't consistent.  In order to combat this problem, I've rewritten
+src/db/sysdb.c to check for certain values in the username before returning.
+At the time of writing, this customization is on line 1332.  It's a simple 
+for loop.
+
 ## Introduction
 SSSD provides a set of daemons to manage access to remote directories and
 authentication mechanisms such as LDAP, Kerberos or FreeIPA. It provides
