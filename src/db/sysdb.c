@@ -1328,7 +1328,31 @@ errno_t sysdb_attrs_primary_name(struct sysdb_ctx *sysdb,
         DEBUG(SSSDBG_MINOR_FAILURE,
               "The entry has multiple names and the RDN attribute does "
                   "not match. Will use the first value as fallback.\n");
-        *_primary = (const char *)sysdb_name_el->values[0].data;
+
+/*
+		Here, we'll check each uid to see if it contains the characters "ur", 
+		if it does, we'll use that one.
+		Otherwise, we'll default to the first one
+		We'll print them out for debug purposes
+*/
+        for(int j = 0; j < sysdb_name_el->num_values; j++){
+			DEBUG(SSSDBG_TRACE_INTERNAL, "Checking the uid value: [%s]\n",
+              (const char *)sysdb_name_el->values[j].data);
+            if(strcasestr((const char *)sysdb_name_el->values[j].data, "ur") != NULL){
+                *_primary = (const char*)sysdb_name_el->values[j].data;
+				DEBUG(SSSDBG_TRACE_INTERNAL, "Found a match, using: [%s]\n",
+					(const char *)sysdb_name_el->values[j].data);
+                ret = EOK;
+                goto done;
+            }
+            if(j == sysdb_name_el->num_values){
+				DEBUG(SSSDBG_TRACE_INTERNAL, "Failed to find a match, using: [%s]\n",
+					(const char *)sysdb_name_el->values[0].data);
+                *_primary = (const char *)sysdb_name_el->values[0].data;
+            }
+        }
+
+
         ret = EOK;
         goto done;
     }
