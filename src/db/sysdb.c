@@ -1329,29 +1329,95 @@ errno_t sysdb_attrs_primary_name(struct sysdb_ctx *sysdb,
               "The entry has multiple names and the RDN attribute does "
                   "not match. Will use the first value as fallback.\n");
 
-/*
-		Here, we'll check each uid to see if it contains the characters "ur", 
-		if it does, we'll use that one.
-		Otherwise, we'll default to the first one
-		We'll print them out for debug purposes
-*/
-        for(int j = 0; j < sysdb_name_el->num_values; j++){
-			DEBUG(SSSDBG_TRACE_INTERNAL, "Checking the uid value: [%s]\n",
-              (const char *)sysdb_name_el->values[j].data);
-            if(strcasestr((const char *)sysdb_name_el->values[j].data, "ur") != NULL){
-                *_primary = (const char*)sysdb_name_el->values[j].data;
-				DEBUG(SSSDBG_TRACE_INTERNAL, "Found a match, using: [%s]\n",
-					(const char *)sysdb_name_el->values[j].data);
-                ret = EOK;
-                goto done;
-            }
-            if(j == sysdb_name_el->num_values){
-				DEBUG(SSSDBG_TRACE_INTERNAL, "Failed to find a match, using: [%s]\n",
-					(const char *)sysdb_name_el->values[0].data);
-                *_primary = (const char *)sysdb_name_el->values[0].data;
-            }
+        //UID can contain the following values, and will be prioritized in this order:
+        //      ur, va, st, j, k.  We'll check each entry in the list for one of these
+        //      formats and will return based on that
+        //
+        //For this, I'll build an array of possible account types, in their order of priority
+        //      and another array that I'll use as an indicator for whether I've made a match
+        //      or not, and where that match exists in the list of uid values.
+        //      I do this because I don't want to return anything until I've checked everything
+        //
+        char *accountTypes[] = {"ur", "va", "st", "j", "k"};
+        int typeExists[] = {-1, -1, -1, -1, -1};
+        int num_of_valid_accounts = 5;
+        char uname_substring[3];
+
+
+        //We then have to step through the array of account types, and for each account type,
+        //      step through the array of uid's.
+        //
+        for(int k = 0; k < num_of_valid_accounts; k++){
+
+                for(int j = 0; j < sysdb_name_el->num_values; j++){
+
+                        //If we're checking for ur, va, or st
+                        if(k < 3){
+                                //get the first two letters from the current uid
+                                strncpy((char * restrict)uname_substring, (char * restrict)sysdb_name_el->values[j].data, 2);
+                                uname_substring[3] = '\0';
+
+                                DEBUG(SSSDBG_TRACE_INTERNAL, "Checking the uid value: [%s] against account type [%s]\n",
+                                        (const char *)sysdb_name_el->values[j].data,
+                                        (const char *)accountTypes[k]);
+
+                                //Check to see if this uid contains the current account type (at the beginning)
+                                //  and if it does, set the typeExists array element at our current
+                                //  position, to the index of the matching uid.
+                                if(strcasestr((const char *)uname_substring, (const char *)accountTypes[k]) != NULL){
+                                        *_primary = (const char*)sysdb_name_el->values[j].data;
+                                        DEBUG(SSSDBG_TRACE_INTERNAL, "Found a [%s] account type: [%s]\n",
+                                        (const char *)accountTypes[k], (const char *)sysdb_name_el->values[j].data);
+
+                                        typeExists[k] = j;
+                                }
+                        }
+
+                        //Else, we're checking for a j or k account.
+                        else{
+                                //get the first letter from the current uid
+                                strncpy((char * restrict)uname_substring, (char * restrict)sysdb_name_el->values[j].data, 1);
+                                uname_substring[2] = '\0';
+
+                                DEBUG(SSSDBG_TRACE_INTERNAL, "Checking the uid value: [%s] against the account type [%s]\n",
+                                        (const char *)sysdb_name_el->values[j].data,
+                                        (const char*)accountTypes[k]);
+
+                                if(strcasestr((const char *)uname_substring, (const char *)accountTypes[k]) != NULL){
+                                        *_primary = (const char*)sysdb_name_el->values[j].data;
+                                        DEBUG(SSSDBG_TRACE_INTERNAL, "Found a [%s] account type: [%s]\n",
+                                        (const char *)accountTypes[k], (const char *)sysdb_name_el->values[j].data);
+
+                                        typeExists[k] = j;
+                                }
+                        }
+                }
         }
 
+
+        //Now we'll step through the typeExists array, and return the uid at the first non-negative
+        //      position
+        for(int m = 0; m < num_of_valid_accounts; m++){
+                if(typeExists[m] != -1){
+                        DEBUG(SSSDBG_TRACE_INTERNAL, "[%s] type account being used: [%s]\n",
+                        (const char *)accountTypes[m], (const char *)sysdb_name_el->values[typeExists[m]].data);
+                        *_primary = (const char*)sysdb_name_el->values[typeExists[m]].data;
+                        ret = EOK;
+                        goto done;
+                }
+
+                else{
+                        DEBUG(SSSDBG_TRACE_INTERNAL, "Found no [%s] account\n",
+                        (const char *)accountTypes[m]);
+                }
+        }
+
+
+        //If we get here, its because we're on the last value and haven't found
+        //  a match yet.  Return the first one.
+        DEBUG(SSSDBG_TRACE_INTERNAL, "Failed to find a match, using: [%s]\n",
+                (const char *)sysdb_name_el->values[0].data);
+        *_primary = (const char *)sysdb_name_el->values[0].data;
 
         ret = EOK;
         goto done;
