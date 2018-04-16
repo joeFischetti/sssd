@@ -195,6 +195,7 @@ option_strings = {
     'cached_auth_timeout' : _('How long can cached credentials be used for cached authentication'),
     'full_name_format' : _('Printf-compatible format for displaying fully-qualified names'),
     're_expression' : _('Regex to parse username and domain'),
+    'auto_private_groups' : _('Whether to automatically create private groups for users'),
 
     # [provider/ipa]
     'ipa_domain' : _('IPA domain'),
@@ -268,7 +269,7 @@ option_strings = {
     'krb5_fast_principal' : _("Selects the principal to use for FAST"),
     'krb5_canonicalize' : _("Enables principal canonicalization"),
     'krb5_use_enterprise_principal' : _("Enables enterprise principals"),
-    'krb5_map_user' : _('A mapping from user names to kerberos principal names'),
+    'krb5_map_user' : _('A mapping from user names to Kerberos principal names'),
 
     # [provider/krb5/chpass]
     'krb5_kpasswd' : _('Server where the change password service is running if not on the KDC'),
@@ -349,6 +350,7 @@ option_strings = {
     'ldap_user_shadow_flag' : _('shadowFlag attribute'),
     'ldap_user_authorized_service' : _('Attribute listing authorized PAM services'),
     'ldap_user_authorized_host' : _('Attribute listing authorized server hosts'),
+    'ldap_user_authorized_rhost' : _('Attribute listing authorized server rhosts'),
     'ldap_user_krb_last_pwd_change' : _('krbLastPwdChange attribute'),
     'ldap_user_krb_password_expiration' : _('krbPasswordExpiration attribute'),
     'ldap_pwd_attribute' : _('Attribute indicating that server side password policies are active'),
@@ -379,7 +381,7 @@ option_strings = {
     'ldap_group_type' : _('Type of the group and other flags'),
     'ldap_group_external_member' : _('The LDAP group external member attribute'),
     #replaced by ldap_entry_usn# 'ldap_group_entry_usn' : _('entryUSN attribute'),
-    'ldap_group_nesting_level' : _('Maximum nesting level SSSd will follow'),
+    'ldap_group_nesting_level' : _('Maximum nesting level SSSD will follow'),
 
     'ldap_netgroup_search_base' : _('Base DN for netgroup lookups'),
     'ldap_netgroup_object_class' : _('Objectclass for netgroups'),
@@ -471,7 +473,11 @@ option_strings = {
     'proxy_fast_alias' : _('Whether to look up canonical group name from cache if possible'),
 
     # [provider/proxy/auth]
-    'proxy_pam_target' : _('PAM stack to use')
+    'proxy_pam_target' : _('PAM stack to use'),
+
+    # [provider/files]
+    'passwd_files' : _('Path of passwd file sources.'),
+    'group_files' : _('Path of group file sources.')
 }
 
 def striplist(l):
@@ -691,7 +697,7 @@ class SSSDConfigObject(object):
 
     def get_name(self):
         """
-        Return the name of the this object
+        Return the name of the object
 
         === Returns ===
         The domain name
@@ -1395,7 +1401,7 @@ class SSSDConfig(SSSDChangeConf):
         are not passed, it will use the system defaults.
 
         schemafile:
-          The path to the api schema config file. Usually
+          The path to the API schema config file. Usually
           @datadir@/sssd/sssd.api.conf
         schemaplugindir:
           The path the directory containing the provider schema config files.

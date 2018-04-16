@@ -47,6 +47,7 @@ class Idx(Union):
 class NameList(Structure):
     pass
 
+
 NameList._fields_ = [("next", POINTER(NameList)),
                      ("name", POINTER(c_char))]
 
@@ -110,7 +111,7 @@ class NetgroupRetriever(object):
         @return (int, int, List[(string, string, string])
                 (err, errno, netgroups)
             if err is NssReturnCode.SUCCESS netgroups will contain list of
-            touples. Each touple will consist of 3 elemets either string or
+            touples. Each touple will consist of 3 elements either string or
         """
         func = nss_sss_ctypes_loader('_nss_sss_getnetgrent_r')
         func.restype = c_int
@@ -155,7 +156,7 @@ class NetgroupRetriever(object):
         @return (int, int, List[(string, string, string])
                 (err, errno, netgroups)
             if err is NssReturnCode.SUCCESS netgroups will contain list of
-            touples. Each touple will consist of 3 elemets either string or
+            touples. Each touple will consist of 3 elements either string or
             None (host, user, domain).
         """
         res, errno, result = self._flat_fetch_netgroups(self.name)
@@ -187,7 +188,7 @@ class NetgroupRetriever(object):
         @return (int, int, List[(string, string, string])
                 (err, errno, netgroups)
             if err is NssReturnCode.SUCCESS netgroups will contain list of
-            touples. Each touple will consist of 3 elemets either string or
+            touples. Each touple will consist of 3 elements either string or
             None (host, user, domain).
         """
         buff_len = 1024 * 1024
@@ -209,9 +210,12 @@ class NetgroupRetriever(object):
 
             if result_p[0].type == NetgroupType.TRIPLE_VAL:
                 triple = result_p[0].val.triple
-                result.append((triple.host.decode('utf-8'),
-                               triple.user.decode('utf-8'),
-                               triple.domain.decode('utf-8')))
+                result.append((triple.host and triple.host.decode('utf-8')
+                               or "",
+                               triple.user and triple.user.decode('utf-8')
+                               or "",
+                               triple.domain and triple.domain.decode('utf-8')
+                               or ""))
 
             res, errno, result_p = self._getnetgrent_r(result_p, buff,
                                                        buff_len)
@@ -234,7 +238,7 @@ def get_sssd_netgroups(name):
 
     @return (int, int, List[(string, string, string]) (err, errno, netgroups)
         if err is NssReturnCode.SUCCESS netgroups will contain list of touples.
-        Each touple will consist of 3 elemets either string or None
+        Each touple will consist of 3 elements either string or None
         (host, user, domain).
     """
 

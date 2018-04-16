@@ -1,0 +1,13 @@
+[Unit]
+Description=SSSD IFP Service responder
+Documentation=man:sssd-ifp(5)
+After=sssd.service
+BindsTo=sssd.service
+
+[Service]
+Environment=DEBUG_LOGGER=--logger=files
+EnvironmentFile=-/etc/sysconfig/sssd
+Type=dbus
+BusName=org.freedesktop.sssd.infopipe
+ExecStart=/usr/libexec/sssd/sssd_ifp --uid 0 --gid 0 --dbus-activated ${DEBUG_LOGGER}
+Restart=on-failure

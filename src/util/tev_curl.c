@@ -35,7 +35,8 @@
 #include "util/tev_curl.h"
 
 #define TCURL_IOBUF_CHUNK   1024
-#define TCURL_IOBUF_MAX    16384
+/* This limit in the same one as KCM_REPLY_MAX */
+#define TCURL_IOBUF_MAX     10*1024*1024
 
 static bool global_is_curl_initialized;
 
@@ -67,7 +68,7 @@ struct tcurl_ctx {
 struct tcurl_sock {
     struct tcurl_ctx *tctx;     /* Backchannel to the main context */
 
-    curl_socket_t sockfd;       /* curl socket is an int typedef on Unix */
+    curl_socket_t sockfd;       /* curl socket is an int typedef on UNIX */
     struct tevent_fd *fde;      /* tevent tracker of the fd events */
 };
 

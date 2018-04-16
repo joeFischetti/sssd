@@ -75,6 +75,19 @@ AC_SEARCH_LIBS([timer_create], [rt posix4],
 AC_SUBST([LIBADD_TIMER])
 LIBS=$SAVE_LIBS
 
+# Check library for the clock_gettime function
+SAVE_LIBS=$LIBS
+LIBS=
+LIBCLOCK_GETTIME=
+AC_SEARCH_LIBS([clock_gettime], [rt posix4],
+    [AC_DEFINE([HAVE_LIBRT], [1],
+         [Define if you have the librt library or equivalent.])
+     LIBCLOCK_GETTIME="$LIBS"],
+    [AC_MSG_ERROR([unable to find library for the clock_gettime() function])])
+
+AC_SUBST([LIBCLOCK_GETTIME])
+LIBS=$SAVE_LIBS
+
 # Check for presence of modern functions for setting file timestamps
 AC_CHECK_FUNCS([ utimensat \
                  futimens ])
@@ -195,6 +208,7 @@ m4_include([src/external/libresolv.m4])
 m4_include([src/external/intgcheck.m4])
 m4_include([src/external/systemtap.m4])
 m4_include([src/external/service.m4])
+m4_include([src/external/test_ca.m4])
 
 if test x$with_secrets = xyes; then
     m4_include([src/external/libhttp_parser.m4])
@@ -364,7 +378,6 @@ AM_PYTHON2_MODULE([ldap])
 
 if test x$HAVE_SELINUX != x; then
     AM_CHECK_SELINUX
-    AM_CHECK_SELINUX_LOGIN_DIR
 fi
 
 if test x$HAVE_SEMANAGE != x -a x$HAVE_SELINUX != x; then
@@ -446,7 +459,7 @@ AC_CACHE_CHECK(
              sss_cv_attribute_fallthrough_val="__attribute__ ((fallthrough))"
          ],[
              sss_cv_attribute_fallthrough=no
-             sss_cv_attribute_fallthrough_val=
+             sss_cv_attribute_fallthrough_val="((void)0)"
          ])
     ])
 CFLAGS=$SAFE_CFLAGS
@@ -471,6 +484,7 @@ AM_CONDITIONAL([HAVE_CHECK], [test x$have_check != x])
 AM_CHECK_CMOCKA
 AM_CHECK_UID_WRAPPER
 AM_CHECK_NSS_WRAPPER
+AM_CHECK_TEST_CA
 
 # Check if the user wants SSSD to be compiled with systemtap probes
 AM_CHECK_SYSTEMTAP
@@ -494,7 +508,7 @@ AC_CONFIG_FILES([Makefile contrib/sssd.spec src/examples/rwtab src/doxy.config
                  contrib/sssd-pcsc.rules
                  src/sysv/sssd src/sysv/gentoo/sssd src/sysv/SUSE/sssd
                  po/Makefile.in src/man/Makefile src/tests/cwrap/Makefile
-                 src/tests/intg/Makefile
+                 src/tests/intg/Makefile src/tests/test_CA/Makefile
                  src/lib/ipa_hbac/ipa_hbac.pc src/lib/ipa_hbac/ipa_hbac.doxy
                  src/lib/idmap/sss_idmap.pc src/lib/idmap/sss_idmap.doxy
                  src/lib/certmap/sss_certmap.pc src/lib/certmap/sss_certmap.doxy

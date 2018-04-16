@@ -146,6 +146,7 @@ struct tevent_req *ad_gpo_process_som_send(TALLOC_CTX *mem_ctx,
                                            struct ldb_context *ldb_ctx,
                                            struct sdap_id_op *sdap_op,
                                            struct sdap_options *opts,
+                                           struct dp_option *ad_options,
                                            int timeout,
                                            const char *target_dn,
                                            const char *domain_name);
@@ -680,7 +681,7 @@ ad_gpo_ace_includes_client_sid(const char *user_sid,
  * named "ApplyGroupPolicy" (AGP) is allowed, by comparing the specified
  * user_sid and group_sids against the specified access control entry (ACE).
  * This function returns ALLOWED, DENIED, or NEUTRAL depending on whether
- * the ACE explictly allows, explicitly denies, or does neither.
+ * the ACE explicitly allows, explicitly denies, or does neither.
  *
  * Note that the 'M' abbreviation used in the evaluation algorithm stands for
  * "access_mask", which represents the set of access rights associated with an
@@ -1975,6 +1976,7 @@ ad_gpo_target_dn_retrieval_done(struct tevent_req *subreq)
                                      state->ldb_ctx,
                                      state->sdap_op,
                                      state->opts,
+                                     state->access_ctx->ad_options,
                                      state->timeout,
                                      state->target_dn,
                                      state->host_domain->name);
@@ -2701,6 +2703,7 @@ struct ad_gpo_process_som_state {
     struct tevent_context *ev;
     struct sdap_id_op *sdap_op;
     struct sdap_options *opts;
+    struct dp_option *ad_options;
     int timeout;
     bool allow_enforced_only;
     char *site_name;
@@ -2734,6 +2737,7 @@ ad_gpo_process_som_send(TALLOC_CTX *mem_ctx,
                         struct ldb_context *ldb_ctx,
                         struct sdap_id_op *sdap_op,
                         struct sdap_options *opts,
+                        struct dp_option *ad_options,
                         int timeout,
                         const char *target_dn,
                         const char *domain_name)
@@ -2752,6 +2756,7 @@ ad_gpo_process_som_send(TALLOC_CTX *mem_ctx,
     state->ev = ev;
     state->sdap_op = sdap_op;
     state->opts = opts;
+    state->ad_options = ad_options;
     state->timeout = timeout;
     state->som_index = 0;
     state->allow_enforced_only = 0;
@@ -2801,7 +2806,8 @@ ad_gpo_site_name_retrieval_done(struct tevent_req *subreq)
     struct tevent_req *req;
     struct ad_gpo_process_som_state *state;
     int ret;
-    char *site;
+    char *site = NULL;
+    char *site_override = NULL;
     const char *attrs[] = {AD_AT_CONFIG_NC, NULL};
 
     req = tevent_req_callback_data(subreq, struct tevent_req);
@@ -2812,16 +2818,42 @@ ad_gpo_site_name_retrieval_done(struct tevent_req *subreq)
     talloc_zfree(subreq);
 
     if (ret != EOK || site == NULL) {
-        DEBUG(SSSDBG_OP_FAILURE, "Cannot retrieve master domain info\n");
+        DEBUG(SSSDBG_TRACE_FUNC,
+              "Could not autodiscover AD site. This is not fatal if "
+              "ad_site option was set.\n");
+    }
+
+    site_override = dp_opt_get_string(state->ad_options, AD_SITE);
+    if (site_override != NULL) {
+        DEBUG(SSSDBG_TRACE_FUNC,
+              "Overriding autodiscovered AD site value '%s' with '%s' from "
+              "configuration.\n", site ? site : "none", site_override);
+    }
+
+    if (site == NULL && site_override == NULL) {
+        sss_log(SSS_LOG_WARNING,
+                "Could not autodiscover AD site value using DNS and ad_site "
+                "option was not set in configuration. GPO will not work. "
+                "To work around this issue you can use ad_site option in SSSD "
+                "configuration.");
+        DEBUG(SSSDBG_OP_FAILURE,
+              "Could not autodiscover AD site value using DNS and ad_site "
+              "option was not set in configuration. GPO will not work. "
+              "To work around this issue you can use ad_site option in SSSD "
+              "configuration.\n");
         tevent_req_error(req, ENOENT);
         return;
     }
 
-    state->site_name = talloc_asprintf(state, "cn=%s", site);
+    state->site_name = talloc_asprintf(state, "cn=%s",
+                                       site_override ? site_override
+                                                     : site);
     if (state->site_name == NULL) {
         tevent_req_error(req, ENOMEM);
         return;
     }
+
+    DEBUG(SSSDBG_TRACE_FUNC, "Using AD site '%s'.\n", state->site_name);
 
     /*
      * note: the configNC attribute is being retrieved here from the rootDSE
@@ -3860,7 +3892,7 @@ ad_gpo_sd_process_attrs(struct tevent_req *req,
     ret = sysdb_attrs_get_int32_t(result, AD_AT_FUNC_VERSION,
                                   &gp_gpo->gpo_func_version);
     if (ret == ENOENT) {
-        /* If this attrbute is missing we can skip the GPO. It will
+        /* If this attribute is missing we can skip the GPO. It will
          * be filtered out according to MS-GPOL:
          * https://msdn.microsoft.com/en-us/library/cc232538.aspx */
         DEBUG(SSSDBG_TRACE_ALL, "GPO with GUID %s is missing attribute "

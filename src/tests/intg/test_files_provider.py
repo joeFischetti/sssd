@@ -25,6 +25,7 @@ import subprocess
 import pwd
 import grp
 import pytest
+import tempfile
 
 import ent
 import sssd_id
@@ -33,7 +34,7 @@ from sssd_passwd import (call_sssd_getpwnam,
                          call_sssd_enumeration,
                          call_sssd_getpwuid)
 from sssd_group import call_sssd_getgrnam, call_sssd_getgrgid
-from files_ops import passwd_ops_setup, group_ops_setup
+from files_ops import passwd_ops_setup, group_ops_setup, PasswdOps, GroupOps
 from util import unindent
 
 # Sync this with files_ops.c
@@ -59,6 +60,11 @@ OV_USER1 = dict(name='ov_user1', passwd='x', uid=10010, gid=20010,
                 dir='/home/ov/user1',
                 shell='/bin/ov_user1_shell')
 
+ALT_USER1 = dict(name='altuser1', passwd='x', uid=60001, gid=70001,
+                 gecos='User for tests from alt files',
+                 dir='/home/altuser1',
+                 shell='/bin/bash')
+
 CANARY_GR = dict(name='canary',
                  gid=300001,
                  mem=[])
@@ -78,6 +84,10 @@ GROUP12 = dict(name='group12',
 GROUP_NOMEM = dict(name='group_nomem',
                    gid=40000,
                    mem=[])
+
+ALT_GROUP1 = dict(name='alt_group1',
+                  gid=80001,
+                  mem=['alt_user1'])
 
 
 def start_sssd():
@@ -146,6 +156,58 @@ def files_domain_only(request):
 
 
 @pytest.fixture
+def files_multiple_sources(request):
+    _, alt_passwd_path = tempfile.mkstemp(prefix='altpasswd')
+    request.addfinalizer(lambda: os.unlink(alt_passwd_path))
+    alt_pwops = PasswdOps(alt_passwd_path)
+
+    _, alt_group_path = tempfile.mkstemp(prefix='altgroup')
+    request.addfinalizer(lambda: os.unlink(alt_group_path))
+    alt_grops = GroupOps(alt_group_path)
+
+    passwd_list = ",".join([os.environ["NSS_WRAPPER_PASSWD"], alt_passwd_path])
+    group_list = ",".join([os.environ["NSS_WRAPPER_GROUP"], alt_group_path])
+
+    conf = unindent("""\
+        [sssd]
+        domains             = files
+        services            = nss
+
+        [nss]
+        debug_level = 10
+
+        [domain/files]
+        id_provider = files
+        passwd_files = {passwd_list}
+        group_files = {group_list}
+        debug_level = 10
+    """).format(**locals())
+    create_conf_fixture(request, conf)
+    create_sssd_fixture(request)
+    return alt_pwops, alt_grops
+
+
+@pytest.fixture
+def proxy_to_files_domain_only(request):
+    conf = unindent("""\
+        [sssd]
+        domains             = proxy, local
+        services            = nss
+
+        [domain/local]
+        id_provider = local
+
+        [domain/proxy]
+        id_provider = proxy
+        proxy_lib_name = files
+        auth_provider = none
+    """).format(**locals())
+    create_conf_fixture(request, conf)
+    create_sssd_fixture(request)
+    return None
+
+
+@pytest.fixture
 def no_sssd_domain(request):
     conf = unindent("""\
         [sssd]
@@ -167,6 +229,9 @@ def no_files_domain(request):
 
         [domain/local]
         id_provider = local
+
+        [domain/disabled.files]
+        id_provider = files
     """).format(**locals())
     create_conf_fixture(request, conf)
     create_sssd_fixture(request)
@@ -420,7 +485,7 @@ def test_group_overriden(add_group_with_canary, files_domain_only):
 
 def test_getpwnam_neg(files_domain_only):
     """
-    Test that a nonexistant user cannot be resolved by name
+    Test that a nonexistent user cannot be resolved by name
     """
     res, _ = call_sssd_getpwnam("nosuchuser")
     assert res == NssReturnCode.NOTFOUND
@@ -428,7 +493,7 @@ def test_getpwnam_neg(files_domain_only):
 
 def test_getpwuid_neg(files_domain_only):
     """
-    Test that a nonexistant user cannot be resolved by UID
+    Test that a nonexistent user cannot be resolved by UID
     """
     res, _ = call_sssd_getpwuid(12345)
     assert res == NssReturnCode.NOTFOUND
@@ -594,7 +659,7 @@ def test_getgrgid_after_start(add_group_with_canary, files_domain_only):
 
 def test_getgrnam_neg(files_domain_only):
     """
-    Test that a nonexistant group cannot be resolved
+    Test that a nonexistent group cannot be resolved
     """
     res, user = sssd_getgrnam_sync("nosuchgroup")
     assert res == NssReturnCode.NOTFOUND
@@ -602,7 +667,7 @@ def test_getgrnam_neg(files_domain_only):
 
 def test_getgrgid_neg(files_domain_only):
     """
-    Test that a nonexistant group cannot be resolved
+    Test that a nonexistent group cannot be resolved
     """
     res, user = sssd_getgrgid_sync(123456)
     assert res == NssReturnCode.NOTFOUND
@@ -977,6 +1042,26 @@ def test_no_sssd_domain(add_user_with_canary, no_sssd_domain):
     assert user == USER1
 
 
+def test_proxy_to_files_domain_only(add_user_with_canary,
+                                    proxy_to_files_domain_only):
+    """
+    Test that implicit_files domain is not started together with proxy to files
+    """
+    local_user1 = dict(name='user1', passwd='*', uid=10009, gid=10009,
+                       gecos='user1', dir='/home/user1', shell='/bin/bash')
+
+    # Add a user with a different UID than the one in files
+    subprocess.check_call(
+        ["sss_useradd", "-u", "10009", "-M", USER1["name"]])
+
+    res, user = call_sssd_getpwnam(USER1["name"])
+    assert res == NssReturnCode.SUCCESS
+    assert user == local_user1
+
+    res, _ = call_sssd_getpwnam("{0}@implicit_files".format(USER1["name"]))
+    assert res == NssReturnCode.NOTFOUND
+
+
 def test_no_files_domain(add_user_with_canary, no_files_domain):
     """
     Test that if no files domain is configured, sssd will add the implicit one
@@ -1011,3 +1096,20 @@ def test_no_sssd_conf(add_user_with_canary, no_sssd_conf):
     res, user = sssd_getpwnam_sync(USER1["name"])
     assert res == NssReturnCode.SUCCESS
     assert user == USER1
+
+
+def test_multiple_passwd_group_files(add_user_with_canary,
+                                     add_group_with_canary,
+                                     files_multiple_sources):
+    """
+    Test that users and groups can be mirrored from multiple files
+    """
+    alt_pwops, alt_grops = files_multiple_sources
+    alt_pwops.useradd(**ALT_USER1)
+    alt_grops.groupadd(**ALT_GROUP1)
+
+    check_user(USER1)
+    check_user(ALT_USER1)
+
+    check_group(GROUP1)
+    check_group(ALT_GROUP1)

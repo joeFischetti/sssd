@@ -49,6 +49,8 @@ if [[ "$DISTRO_BRANCH" == -redhat-* ]]; then
         curl-devel
         krb5-server
         krb5-workstation
+        dbus-python
+        python-pep8
     )
     _DEPS_LIST_SPEC=`
         sed -e 's/@PACKAGE_VERSION@/0/g' \
@@ -128,6 +130,9 @@ if [[ "$DISTRO_BRANCH" == -debian-* ]]; then
         krb5-admin-server
         krb5-user
         uuid-dev
+        dbus
+        python-dbus
+        pep8
     )
     DEPS_INTGCHECK_SATISFIED=true
 fi

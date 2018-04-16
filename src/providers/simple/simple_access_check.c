@@ -55,6 +55,9 @@ simple_check_users(struct simple_ctx *ctx, const char *username,
     /* First, check whether the user is in the allowed users list */
     if (ctx->allow_users != NULL) {
         for(i = 0; ctx->allow_users[i] != NULL; i++) {
+            DEBUG(SSSDBG_TRACE_ALL,
+                  "Checking against allow list username [%s].\n",
+                  ctx->allow_users[i]);
             domain = find_domain_by_object_name(ctx->domain,
                                                 ctx->allow_users[i]);
             if (domain == NULL) {
@@ -85,13 +88,16 @@ simple_check_users(struct simple_ctx *ctx, const char *username,
          * unless a deny rule disables us below.
          */
         DEBUG(SSSDBG_TRACE_LIBS,
-              "No allow rule, assumuing allow unless explicitly denied\n");
+              "No allow rule, assuming allow unless explicitly denied\n");
         *access_granted = true;
     }
 
     /* Next check whether this user has been specifically denied */
     if (ctx->deny_users != NULL) {
         for(i = 0; ctx->deny_users[i] != NULL; i++) {
+            DEBUG(SSSDBG_TRACE_ALL,
+                  "Checking against deny list username [%s].\n",
+                  ctx->deny_users[i]);
             domain = find_domain_by_object_name(ctx->domain,
                                                 ctx->deny_users[i]);
             if (domain == NULL) {
@@ -133,6 +139,9 @@ simple_check_groups(struct simple_ctx *ctx, const char **group_names,
     if (ctx->allow_groups && !*access_granted) {
         matched = false;
         for (i = 0; ctx->allow_groups[i]; i++) {
+            DEBUG(SSSDBG_TRACE_ALL,
+                  "Checking against allow list group name [%s].\n",
+                  ctx->allow_groups[i]);
             domain = find_domain_by_object_name(ctx->domain,
                                                 ctx->allow_groups[i]);
             if (domain == NULL) {
@@ -169,6 +178,9 @@ simple_check_groups(struct simple_ctx *ctx, const char **group_names,
     if (ctx->deny_groups) {
         matched = false;
         for (i = 0; ctx->deny_groups[i]; i++) {
+            DEBUG(SSSDBG_TRACE_ALL,
+                  "Checking against deny list group name [%s].\n",
+                  ctx->deny_groups[i]);
             domain = find_domain_by_object_name(ctx->domain,
                                                 ctx->deny_groups[i]);
             if (domain == NULL) {
@@ -596,7 +608,7 @@ simple_check_process_group(struct simple_check_groups_state *state,
             return EINVAL;
         }
 
-        /* Non-posix group with a name. Still can be used for access
+        /* Non-POSIX group with a name. Still can be used for access
          * control as the name should point to the real name, no SID
          */
         state->group_names[state->num_names] = talloc_strdup(state->group_names,
@@ -636,7 +648,7 @@ simple_check_process_group(struct simple_check_groups_state *state,
         }
     }
 
-    /* It is a non-posix group with a GID. Needs resolving */
+    /* It is a non-POSIX group with a GID. Needs resolving */
     state->lookup_groups[state->num_groups].domain = domain;
     state->lookup_groups[state->num_groups].gid = gid;
     DEBUG(SSSDBG_TRACE_INTERNAL, "Adding GID %"SPRIgid"\n", gid);

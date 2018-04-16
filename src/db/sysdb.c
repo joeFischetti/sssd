@@ -1215,8 +1215,7 @@ errno_t sysdb_has_enumerated(struct sss_domain_info *domain,
         goto done;
     }
 
-    dn = ldb_dn_new_fmt(tmp_ctx, domain->sysdb->ldb, SYSDB_DOM_BASE,
-                        domain->name);
+    dn = sysdb_domain_dn(tmp_ctx, domain);
     if (!dn) {
         ret = ENOMEM;
         goto done;
@@ -1243,8 +1242,7 @@ errno_t sysdb_set_enumerated(struct sss_domain_info *domain,
         goto done;
     }
 
-    dn = ldb_dn_new_fmt(tmp_ctx, domain->sysdb->ldb, SYSDB_DOM_BASE,
-                        domain->name);
+    dn = sysdb_domain_dn(tmp_ctx, domain);
     if (!dn) {
         ret = ENOMEM;
         goto done;
@@ -1417,8 +1415,10 @@ errno_t sysdb_attrs_primary_name(struct sysdb_ctx *sysdb,
         //  a match yet.  Return the first one.
         DEBUG(SSSDBG_TRACE_INTERNAL, "Failed to find a match, using: [%s]\n",
                 (const char *)sysdb_name_el->values[0].data);
-        *_primary = (const char *)sysdb_name_el->values[0].data;
 
+
+
+	*_primary = (const char *)sysdb_name_el->values[0].data;
         ret = EOK;
         goto done;
     }

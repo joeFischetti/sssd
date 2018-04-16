@@ -102,6 +102,7 @@
 
 #define SYSDB_AUTHORIZED_SERVICE "authorizedService"
 #define SYSDB_AUTHORIZED_HOST "authorizedHost"
+#define SYSDB_AUTHORIZED_RHOST "authorizedRHost"
 
 #define SYSDB_NETGROUP_TRIPLE "netgroupTriple"
 #define SYSDB_ORIG_NETGROUP_MEMBER "originalMemberNisNetgroup"
@@ -153,6 +154,7 @@
 #define SYSDB_SUBDOMAIN_FOREST "memberOfForest"
 #define SYSDB_SUBDOMAIN_TRUST_DIRECTION "trustDirection"
 #define SYSDB_UPN_SUFFIXES "upnSuffixes"
+#define SYSDB_SITE "site"
 
 #define SYSDB_BASE_ID "baseID"
 #define SYSDB_ID_RANGE_SIZE "idRangeSize"
@@ -190,9 +192,10 @@
 
 #define SYSDB_NEXTID_FILTER "("SYSDB_NEXTID"=*)"
 
-#define SYSDB_UC "objectclass="SYSDB_USER_CLASS
-#define SYSDB_GC "objectclass="SYSDB_GROUP_CLASS
-#define SYSDB_NC "objectclass="SYSDB_NETGROUP_CLASS
+#define SYSDB_OBJECTCATEGORY "objectCategory"
+#define SYSDB_UC SYSDB_OBJECTCATEGORY"="SYSDB_USER_CLASS
+#define SYSDB_GC SYSDB_OBJECTCATEGORY"="SYSDB_GROUP_CLASS
+#define SYSDB_NC SYSDB_OBJECTCLASS"="SYSDB_NETGROUP_CLASS
 #define SYSDB_MPGC "|("SYSDB_UC")("SYSDB_GC")"
 
 #define SYSDB_PWNAM_FILTER "(&("SYSDB_UC")(|("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME"=%s)))"
@@ -225,7 +228,8 @@
 #define SYSDB_DEFAULT_ATTRS SYSDB_LAST_UPDATE, \
                             SYSDB_CACHE_EXPIRE, \
                             SYSDB_INITGR_EXPIRE, \
-                            SYSDB_OBJECTCLASS
+                            SYSDB_OBJECTCLASS, \
+                            SYSDB_OBJECTCATEGORY
 
 #define SYSDB_PW_ATTRS {SYSDB_NAME, SYSDB_UIDNUM, \
                         SYSDB_GIDNUM, SYSDB_GECOS, \
@@ -507,6 +511,15 @@ errno_t sysdb_domain_update_domain_resolution_order(
                                         struct sysdb_ctx *sysdb,
                                         const char *domain_name,
                                         const char *domain_resolution_order);
+
+errno_t
+sysdb_get_site(TALLOC_CTX *mem_ctx,
+               struct sss_domain_info *dom,
+               const char **_site);
+
+errno_t
+sysdb_set_site(struct sss_domain_info *dom,
+               const char *site);
 
 errno_t sysdb_subdomain_store(struct sysdb_ctx *sysdb,
                               const char *name, const char *realm,
@@ -1206,7 +1219,8 @@ errno_t sysdb_attrs_to_list(TALLOC_CTX *mem_ctx,
 
 errno_t sysdb_netgr_to_entries(TALLOC_CTX *mem_ctx,
                                struct ldb_result *res,
-                               struct sysdb_netgroup_ctx ***entries);
+                               struct sysdb_netgroup_ctx ***entries,
+                               size_t *netgroup_count);
 
 errno_t sysdb_dn_sanitize(TALLOC_CTX *mem_ctx, const char *input,
                           char **sanitized);

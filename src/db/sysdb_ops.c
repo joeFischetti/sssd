@@ -66,7 +66,9 @@ int sss_ldb_modify_permissive(struct ldb_context *ldb,
                               struct ldb_message *msg)
 {
     struct ldb_request *req;
-    int ret = EOK;
+    int ret;
+    int cancel_ret;
+    bool in_transaction = false;
 
     ret = ldb_build_mod_req(&req, ldb, ldb,
                             msg,
@@ -84,9 +86,44 @@ int sss_ldb_modify_permissive(struct ldb_context *ldb,
         return ret;
     }
 
+    ret = ldb_transaction_start(ldb);
+    if (ret != LDB_SUCCESS) {
+        DEBUG(SSSDBG_CRIT_FAILURE,
+              "Failed to start ldb transaction [%d]: %s\n",
+              ret, sss_strerror(ret));
+        goto done;
+    }
+
+    in_transaction = true;
+
     ret = ldb_request(ldb, req);
     if (ret == LDB_SUCCESS) {
         ret = ldb_wait(req->handle, LDB_WAIT_ALL);
+        if (ret != LDB_SUCCESS) {
+            goto done;
+        }
+    }
+
+    ret = ldb_transaction_commit(ldb);
+    if (ret != LDB_SUCCESS) {
+        DEBUG(SSSDBG_CRIT_FAILURE,
+              "Failed to commit ldb transaction [%d]: %s\n",
+              ret, sss_strerror(ret));
+        goto done;
+    }
+
+    in_transaction = false;
+
+    ret = LDB_SUCCESS;
+
+done:
+    if (in_transaction) {
+        cancel_ret = ldb_transaction_cancel(ldb);
+        if (cancel_ret != LDB_SUCCESS) {
+            DEBUG(SSSDBG_CRIT_FAILURE,
+                  "Failed to cancel ldb transaction [%d]: %s\n",
+                  cancel_ret, sss_strerror(cancel_ret));
+        }
     }
 
     talloc_free(req);
@@ -435,7 +472,6 @@ static int sysdb_search_by_name(TALLOC_CTX *mem_ctx,
 {
     TALLOC_CTX *tmp_ctx;
     const char *def_attrs[] = { SYSDB_NAME, NULL, NULL };
-    const char *base_tmpl = NULL;
     const char *filter_tmpl = NULL;
     struct ldb_message **msgs = NULL;
     struct ldb_dn *basedn;
@@ -445,28 +481,36 @@ static int sysdb_search_by_name(TALLOC_CTX *mem_ctx,
     char *filter;
     int ret;
 
-    switch (type) {
-    case SYSDB_USER:
-        def_attrs[1] = SYSDB_UIDNUM;
-        base_tmpl = SYSDB_TMPL_USER_BASE;
-        filter_tmpl = SYSDB_PWNAM_FILTER;
-        break;
-    case SYSDB_GROUP:
-        def_attrs[1] = SYSDB_GIDNUM;
-        base_tmpl = SYSDB_TMPL_GROUP_BASE;
-        filter_tmpl = SYSDB_GRNAM_FILTER;
-        break;
-    default:
-        return EINVAL;
-    }
-
     tmp_ctx = talloc_new(NULL);
     if (!tmp_ctx) {
         return ENOMEM;
     }
 
-    basedn = ldb_dn_new_fmt(tmp_ctx, domain->sysdb->ldb,
-                            base_tmpl, domain->name);
+    switch (type) {
+    case SYSDB_USER:
+        def_attrs[1] = SYSDB_UIDNUM;
+        filter_tmpl = SYSDB_PWNAM_FILTER;
+        basedn = sysdb_user_base_dn(tmp_ctx, domain);
+        break;
+    case SYSDB_GROUP:
+        def_attrs[1] = SYSDB_GIDNUM;
+        if (domain->mpg) {
+            /* When searching a group by name in a MPG domain, we also
+             * need to search the user space in order to be able to match
+             * a user private group/
+             */
+            filter_tmpl = SYSDB_GRNAM_MPG_FILTER;
+            basedn = sysdb_domain_dn(tmp_ctx, domain);
+        } else {
+            filter_tmpl = SYSDB_GRNAM_FILTER;
+            basedn = sysdb_group_base_dn(tmp_ctx, domain);
+        }
+        break;
+    default:
+        ret = EINVAL;
+        goto done;
+    }
+
     if (!basedn) {
         ret = ENOMEM;
         goto done;
@@ -601,10 +645,17 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
     int ret;
     const char *def_attrs[] = { SYSDB_NAME, SYSDB_UPN, SYSDB_CANONICAL_UPN,
                                 SYSDB_USER_EMAIL, NULL };
+    char *sanitized;
 
     tmp_ctx = talloc_new(NULL);
     if (tmp_ctx == NULL) {
         ret = ENOMEM;
+        goto done;
+    }
+
+    ret = sss_filter_sanitize(tmp_ctx, upn, &sanitized);
+    if (ret != EOK) {
+        DEBUG(SSSDBG_OP_FAILURE, "sss_filter_sanitize failed.\n");
         goto done;
     }
 
@@ -620,7 +671,7 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
 
     ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &res,
                      base_dn, LDB_SCOPE_SUBTREE, attrs ? attrs : def_attrs,
-                     SYSDB_PWUPN_FILTER, upn, upn, upn);
+                     SYSDB_PWUPN_FILTER, sanitized, sanitized, sanitized);
     if (ret != EOK) {
         ret = sysdb_error_to_errno(ret);
         goto done;
@@ -633,7 +684,9 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
         goto done;
     } else if (res->count > 1) {
         DEBUG(SSSDBG_OP_FAILURE,
-              "Search for upn [%s] returns more than one result.\n", upn);
+              "Search for upn [%s] returns more than one result. One of the "
+              "possible reasons can be that several users share the same "
+              "email address.\n", upn);
         ret = EINVAL;
         goto done;
     }
@@ -949,7 +1002,7 @@ static struct sysdb_attrs *ts_obj_attrs(TALLOC_CTX *mem_ctx,
         return NULL;
     }
 
-    ret = sysdb_attrs_add_string(attrs, SYSDB_OBJECTCLASS, oc);
+    ret = sysdb_attrs_add_string(attrs, SYSDB_OBJECTCATEGORY, oc);
     if (ret != EOK) {
         talloc_free(attrs);
         return NULL;
@@ -1658,7 +1711,7 @@ int sysdb_add_basic_user(struct sss_domain_info *domain,
         ERROR_OUT(ret, ENOMEM, done);
     }
 
-    ret = sysdb_add_string(msg, SYSDB_OBJECTCLASS, SYSDB_USER_CLASS);
+    ret = sysdb_add_string(msg, SYSDB_OBJECTCATEGORY, SYSDB_USER_CLASS);
     if (ret) goto done;
 
     ret = sysdb_add_string(msg, SYSDB_NAME, name);
@@ -1953,15 +2006,33 @@ int sysdb_add_user(struct sss_domain_info *domain,
     }
 
     if (domain->mpg) {
-        /* In MPG domains you can't have groups with the same name as users,
-         * search if a group with the same name exists.
+        /* In MPG domains you can't have groups with the same name or GID
+         * as users, search if a group with the same name exists.
          * Don't worry about users, if we try to add a user with the same
          * name the operation will fail */
 
         ret = sysdb_search_group_by_name(tmp_ctx, domain, name, NULL, &msg);
         if (ret != ENOENT) {
-            if (ret == EOK) ret = EEXIST;
+            if (ret == EOK) {
+                DEBUG(SSSDBG_OP_FAILURE,
+                      "Group named %s already exists in an MPG domain\n",
+                      name);
+                ret = EEXIST;
+            }
             goto done;
+        }
+
+        if (strcasecmp(domain->provider, "local") != 0) {
+            ret = sysdb_search_group_by_gid(tmp_ctx, domain, uid, NULL, &msg);
+            if (ret != ENOENT) {
+                if (ret == EOK) {
+                    DEBUG(SSSDBG_OP_FAILURE,
+                        "Group with GID [%"SPRIgid"] already exists in an "
+                        "MPG domain\n", gid);
+                    ret = EEXIST;
+                }
+                goto done;
+            }
         }
     }
 
@@ -2093,7 +2164,7 @@ int sysdb_add_basic_group(struct sss_domain_info *domain,
         ERROR_OUT(ret, ENOMEM, done);
     }
 
-    ret = sysdb_add_string(msg, SYSDB_OBJECTCLASS, SYSDB_GROUP_CLASS);
+    ret = sysdb_add_string(msg, SYSDB_OBJECTCATEGORY, SYSDB_GROUP_CLASS);
     if (ret) goto done;
 
     ret = sysdb_add_string(msg, SYSDB_NAME, name);
@@ -2169,6 +2240,23 @@ int sysdb_add_group(struct sss_domain_info *domain,
                       "sysdb_search_user_by_name failed for user %s.\n", name);
             }
             goto done;
+        }
+
+        if (strcasecmp(domain->provider, "local") != 0) {
+            ret = sysdb_search_user_by_uid(tmp_ctx, domain, gid, NULL, &msg);
+            if (ret != ENOENT) {
+                if (ret == EOK) {
+                    DEBUG(SSSDBG_TRACE_LIBS,
+                          "User with the same UID exists in MPG domain: "
+                          "[%"SPRIgid"].\n", gid);
+                    ret = EEXIST;
+                } else {
+                    DEBUG(SSSDBG_TRACE_LIBS,
+                          "sysdb_search_user_by_uid failed for gid: "
+                          "[%"SPRIgid"].\n", gid);
+                }
+                goto done;
+            }
         }
     }
 
@@ -3104,7 +3192,7 @@ int sysdb_cache_password_ex(struct sss_domain_info *domain,
         if (ret) goto fail;
     }
 
-    /* FIXME: should we use a different attribute for chache passwords ?? */
+    /* FIXME: should we use a different attribute for cache passwords?? */
     ret = sysdb_attrs_add_long(attrs, "lastCachedPasswordChange",
                                (long)time(NULL));
     if (ret) goto fail;
@@ -3311,12 +3399,7 @@ int sysdb_store_custom(struct sss_domain_info *domain,
                        struct sysdb_attrs *attrs)
 {
     TALLOC_CTX *tmp_ctx;
-    const char *search_attrs[] = { "*", NULL };
-    size_t resp_count = 0;
-    struct ldb_message **resp;
     struct ldb_message *msg;
-    struct ldb_message_element *el;
-    bool add_object = false;
     int ret;
     int i;
 
@@ -3335,15 +3418,10 @@ int sysdb_store_custom(struct sss_domain_info *domain,
         goto done;
     }
 
-    ret = sysdb_search_custom_by_name(tmp_ctx, domain,
-                                      object_name, subtree_name,
-                                      search_attrs, &resp_count, &resp);
-    if (ret != EOK && ret != ENOENT) {
+    /* Always add a new object. */
+    ret = sysdb_delete_custom(domain, object_name, subtree_name);
+    if (ret != EOK) {
         goto done;
-    }
-
-    if (ret == ENOENT) {
-       add_object = true;
     }
 
     msg = ldb_msg_new(tmp_ctx);
@@ -3367,24 +3445,11 @@ int sysdb_store_custom(struct sss_domain_info *domain,
 
     for (i = 0; i < attrs->num; i++) {
         msg->elements[i] = attrs->a[i];
-        if (add_object) {
-            msg->elements[i].flags = LDB_FLAG_MOD_ADD;
-        } else {
-            el = ldb_msg_find_element(resp[0], attrs->a[i].name);
-            if (el == NULL) {
-                msg->elements[i].flags = LDB_FLAG_MOD_ADD;
-            } else {
-                msg->elements[i].flags = LDB_FLAG_MOD_REPLACE;
-            }
-        }
+        msg->elements[i].flags = LDB_FLAG_MOD_ADD;
     }
     msg->num_elements = attrs->num;
 
-    if (add_object) {
-        ret = ldb_add(domain->sysdb->ldb, msg);
-    } else {
-        ret = ldb_modify(domain->sysdb->ldb, msg);
-    }
+    ret = ldb_add(domain->sysdb->ldb, msg);
     if (ret != LDB_SUCCESS) {
         DEBUG(SSSDBG_CRIT_FAILURE, "Failed to store custom entry: %s(%d)[%s]\n",
                   ldb_strerror(ret), ret, ldb_errstring(domain->sysdb->ldb));
@@ -4767,8 +4832,7 @@ static errno_t sysdb_search_object_attr(TALLOC_CTX *mem_ctx,
         return ENOMEM;
     }
 
-    basedn = ldb_dn_new_fmt(tmp_ctx, domain->sysdb->ldb, SYSDB_DOM_BASE,
-                            domain->name);
+    basedn = sysdb_domain_dn(tmp_ctx, domain);
     if (basedn == NULL) {
         DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_new_fmt failed.\n");
         ret = ENOMEM;
@@ -4823,17 +4887,31 @@ static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
                                                bool expect_only_one_result,
                                                struct ldb_result **_res)
 {
-    char *filter;
+    char *filter = NULL;
     errno_t ret;
+    char *sanitized = NULL;
 
-    filter = talloc_asprintf(NULL, filter_tmpl, str);
+    if (str == NULL) {
+        return EINVAL;
+    }
+
+    ret = sss_filter_sanitize(NULL, str, &sanitized);
+    if (ret != EOK) {
+        DEBUG(SSSDBG_OP_FAILURE, "sss_filter_sanitize failed.\n");
+        goto done;
+    }
+
+    filter = talloc_asprintf(NULL, filter_tmpl, sanitized);
     if (filter == NULL) {
-        return ENOMEM;
+        ret = ENOMEM;
+        goto done;
     }
 
     ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs,
                                    expect_only_one_result, _res);
 
+done:
+    talloc_free(sanitized);
     talloc_free(filter);
     return ret;
 }
@@ -4922,7 +5000,8 @@ errno_t sysdb_search_object_by_cert(TALLOC_CTX *mem_ctx,
                                     struct ldb_result **res)
 {
     int ret;
-    char *user_filter;
+    char *user_filter = NULL;
+    char *filter = NULL;
 
     ret = sss_cert_derb64_to_ldap_filter(mem_ctx, cert, SYSDB_USER_MAPPED_CERT,
                                          NULL, NULL, &user_filter);
@@ -4931,10 +5010,15 @@ errno_t sysdb_search_object_by_cert(TALLOC_CTX *mem_ctx,
         return ret;
     }
 
-    ret = sysdb_search_object_by_str_attr(mem_ctx, domain,
-                                          SYSDB_USER_CERT_FILTER,
-                                          user_filter, attrs, false, res);
+    filter = talloc_asprintf(NULL, SYSDB_USER_CERT_FILTER, user_filter);
     talloc_free(user_filter);
+    if (filter == NULL) {
+        return ENOMEM;
+    }
+
+    ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, false, res);
+
+    talloc_free(filter);
 
     return ret;
 }
@@ -5081,7 +5165,7 @@ errno_t sysdb_get_sids_of_members(TALLOC_CTX *mem_ctx,
         goto done;
     }
 
-    /* Get sid_str attribute of all elemets pointed to by group members */
+    /* Get sid_str attribute of all elements pointed to by group members */
     ret = sysdb_asq_search(tmp_ctx, dom, msg->dn, NULL, SYSDB_MEMBER, attrs,
                            &m_count, &members);
     if (ret != EOK) {
@@ -5298,6 +5382,19 @@ errno_t sysdb_mark_entry_as_expired_ldb_dn(struct sss_domain_info *dom,
     }
 
     ret = ldb_msg_add_string(msg, SYSDB_CACHE_EXPIRE, "1");
+    if (ret != LDB_SUCCESS) {
+        ret = sysdb_error_to_errno(ret);
+        goto done;
+    }
+
+    ret = ldb_msg_add_empty(msg, SYSDB_ORIG_MODSTAMP,
+                            LDB_FLAG_MOD_REPLACE, NULL);
+    if (ret != LDB_SUCCESS) {
+        ret = sysdb_error_to_errno(ret);
+        goto done;
+    }
+
+    ret = ldb_msg_add_string(msg, SYSDB_ORIG_MODSTAMP, "1");
     if (ret != LDB_SUCCESS) {
         ret = sysdb_error_to_errno(ret);
         goto done;

@@ -43,7 +43,7 @@
 
 #define MATCHRDN_USER(map)      (map)[SDAP_AT_USER_NAME].name, "cn", "users", "cn", "accounts"
 #define MATCHRDN_GROUP(map)     (map)[SDAP_AT_GROUP_NAME].name, "cn", "groups", "cn", "accounts"
-#define MATCHRDN_HOST(map)      (map)[IPA_AT_HOST_FQDN].name, "cn", "computers", "cn", "accounts"
+#define MATCHRDN_HOST(map)      (map)[SDAP_AT_HOST_FQDN].name, "cn", "computers", "cn", "accounts"
 #define MATCHRDN_HOSTGROUP(map) (map)[IPA_AT_HOSTGROUP_NAME].name, "cn", "hostgroups", "cn", "accounts"
 
 struct ipa_sudo_conv {
@@ -576,6 +576,17 @@ ipa_sudo_conv_has_cmds(struct ipa_sudo_conv *conv)
     return hash_count(conv->cmds) == 0;
 }
 
+bool
+ipa_sudo_cmdgroups_exceed_threshold(struct ipa_sudo_conv *conv, int threshold)
+{
+    return (hash_count(conv->cmdgroups)) > threshold;
+}
+bool
+ipa_sudo_cmds_exceed_threshold(struct ipa_sudo_conv *conv, int threshold)
+{
+    return (hash_count(conv->cmds)) > threshold;
+}
+
 typedef errno_t (*ipa_sudo_conv_rdn_fn)(TALLOC_CTX *mem_ctx,
                                       struct sdap_attr_map *map,
                                       struct sysdb_ctx *sysdb,
@@ -722,18 +733,36 @@ done:
 
 char *
 ipa_sudo_conv_cmdgroup_filter(TALLOC_CTX *mem_ctx,
-                              struct ipa_sudo_conv *conv)
+                              struct ipa_sudo_conv *conv,
+                              int cmd_threshold)
 {
-    return build_filter(mem_ctx, conv->dom->sysdb, conv->cmdgroups,
-                        conv->map_cmdgroup, get_sudo_cmdgroup_rdn);
+    if (ipa_sudo_cmdgroups_exceed_threshold(conv, cmd_threshold)) {
+        DEBUG(SSSDBG_TRACE_FUNC,
+              "Command threshold [%d] exceeded, retrieving all sudo command "
+              "groups\n", cmd_threshold);
+        return talloc_asprintf(mem_ctx, "(objectClass=%s)",
+                               conv->map_cmdgroup->name);
+    } else {
+        return build_filter(mem_ctx, conv->dom->sysdb, conv->cmdgroups,
+                            conv->map_cmdgroup, get_sudo_cmdgroup_rdn);
+    }
 }
 
 char *
 ipa_sudo_conv_cmd_filter(TALLOC_CTX *mem_ctx,
-                         struct ipa_sudo_conv *conv)
+                         struct ipa_sudo_conv *conv,
+                         int cmd_threshold)
 {
-    return build_filter(mem_ctx, conv->dom->sysdb, conv->cmds,
+    if (ipa_sudo_cmdgroups_exceed_threshold(conv, cmd_threshold)) {
+        DEBUG(SSSDBG_TRACE_FUNC,
+              "Command threshold [%d] exceeded, retrieving all sudo commands\n",
+              cmd_threshold);
+        return talloc_asprintf(mem_ctx, "(objectClass=%s)",
+                               conv->map_cmd->name);
+    } else {
+        return build_filter(mem_ctx, conv->dom->sysdb, conv->cmds,
                             conv->map_cmd, get_sudo_cmd_rdn);
+    }
 }
 
 struct ipa_sudo_conv_result_ctx {
@@ -845,6 +874,15 @@ convert_user_fqdn(TALLOC_CTX *mem_ctx,
 }
 
 static const char *
+convert_ext_user(TALLOC_CTX *mem_ctx,
+                 struct ipa_sudo_conv *conv,
+                 const char *value,
+                 bool *skip_entry)
+{
+    return sss_create_internal_fqname(mem_ctx, value, conv->dom->name);
+}
+
+static const char *
 convert_group(TALLOC_CTX *mem_ctx,
               struct ipa_sudo_conv *conv,
               const char *value,
@@ -930,7 +968,7 @@ convert_attributes(struct ipa_sudo_conv *conv,
                  {SYSDB_IPA_SUDORULE_RUNASEXTUSER,       SYSDB_SUDO_CACHE_AT_RUNASUSER  , NULL},
                  {SYSDB_IPA_SUDORULE_RUNASEXTGROUP,      SYSDB_SUDO_CACHE_AT_RUNASGROUP , NULL},
                  {SYSDB_IPA_SUDORULE_RUNASEXTUSERGROUP,  SYSDB_SUDO_CACHE_AT_RUNASUSER  , convert_runasextusergroup},
-                 {SYSDB_IPA_SUDORULE_EXTUSER,            SYSDB_SUDO_CACHE_AT_USER       , NULL},
+                 {SYSDB_IPA_SUDORULE_EXTUSER,            SYSDB_SUDO_CACHE_AT_USER       , convert_ext_user},
                  {SYSDB_IPA_SUDORULE_ALLOWCMD,           SYSDB_IPA_SUDORULE_ORIGCMD     , NULL},
                  {SYSDB_IPA_SUDORULE_DENYCMD,            SYSDB_IPA_SUDORULE_ORIGCMD     , NULL},
                  {NULL, NULL, NULL}};
